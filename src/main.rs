@@ -1,25 +1,166 @@
 #[macro_use]
 extern crate crossterm;
 
+#[macro_use]
+extern crate clap;
+
 use crossterm::cursor;
 use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::style::Print;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size, Clear, ClearType, DisableLineWrap, EnableLineWrap};
+
+use clap::{App, Arg};
 
 use std::io::stdout;
+use std::thread;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
+use std::cmp;
 
 use itertools::Itertools;
 
 use board::{Board, PushState};
 
 
+arg_enum! {
+    #[derive(Debug)]
+    enum Difficulty {
+        Beginner,
+        Intermediate,
+        Expert,
+    }
+}
+
+impl Difficulty {
+    fn value(&self) -> f32 {
+        match *self {
+            Difficulty::Beginner => 0.1235,
+            Difficulty::Intermediate => 0.1563,
+            Difficulty::Expert => 0.2062,
+        }
+    }
+}
+
+
 fn main() {
+
+    let matches = App::new("rs-minesweeper")
+        .arg(
+            Arg::with_name("width")
+                .help("Sets the width of the board. The minimum is 22, and the maximum is 2 less then your terminal width")
+                .long("width")
+                .short("w")
+                .value_name("WIDTH")
+                .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("height")
+                .help("Sets the height of the board. The minimum is 1, and the maximum is 5 less then your terminal height")
+                .long("height")
+                .short("h")
+                .value_name("HEIGHT")
+                .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("mine_num")
+                .help("Sets the number of mines on the board. Must be one less then the total number of tiles")
+                .long("mines")
+                .short("m")
+                .value_name("MINES")
+                .takes_value(true)
+        )
+        .arg(
+            Arg::with_name("width_max")
+                .help("Sets the width to its maximum. Not compatible with -w [WIDTH]")
+                .long("width-max")
+                .conflicts_with("width")
+        )
+        .arg(
+            Arg::with_name("height_max")
+                .help("Sets the width to its maximum. Not compatible with -h [HEIGHT]")
+                .long("height-max")
+                .conflicts_with("height")
+        )
+        .arg(
+            Arg::with_name("difficulty")
+                .help("Creates a board of either beginner, intermediate, or expert difficulty")
+                .short("d")
+                .long("difficulty")
+                .conflicts_with_all(&["height", "width", "width_max", "height_max"])
+                .value_name("DIFFICULTY")
+                .takes_value(true)
+                .possible_values(&Difficulty::variants())
+                .case_insensitive(true)
+        )
+        .arg(
+            Arg::with_name("smart_difficulty")
+                .help("Sets the number of mines based on preset difficulty ratios")
+                .short("s")
+                .long("smart-difficulty")
+                .conflicts_with_all(&["mine_num", "difficulty"])
+                .value_name("DIFFICULTY")
+                .takes_value(true)
+                .possible_values(&Difficulty::variants())
+                .case_insensitive(true)
+        )
+        .get_matches();
+
     const SPACING: u16 = 12;
 
-    let width = 50u16;
-    let height = 25u16;
+    let mut width = value_t!(matches, "width", u16).unwrap_or(22);
+    let mut height = value_t!(matches, "height", u16).unwrap_or(12);
+    let mut mine_num = value_t!(matches, "height", u16).unwrap_or(41);
 
-    let mut working_board = Board::new(width as usize, height as usize, 100).unwrap();
+    let size = size().unwrap();
+    let size = (size.0 - 2, size.1 - 5);
+
+    if width > size.0 { 
+        println!("error: width cannot be larger then the terminal width - 2");
+        return; 
+    }
+
+    if height > size.1 { 
+        println!("error: height cannot be larger then the terminal height - 5");
+        return; 
+    }
+
+    if mine_num >= width * height {
+        println!("error: number of mines cannot be equal to or larger then the total number of tiles");
+    }
+
+    if matches.is_present("width_max") {
+        width = size.0;
+    }
+
+    if matches.is_present("height_max") {
+        height = size.1;
+    }
+
+    if let Ok(i) = value_t!(matches, "difficulty", Difficulty) {
+        match i {
+            Difficulty::Beginner => {
+                width = 22;
+                height = 4;
+                mine_num = 11;
+            },
+            Difficulty::Intermediate => {
+                width = 22;
+                height = 12;
+                mine_num = 41;
+            }
+            Difficulty::Expert => {
+                width = 22;
+                height = 22;
+                mine_num = 100;
+            }
+        }
+    }
+
+    if let Ok(i) = value_t!(matches, "smart_difficulty", Difficulty) {
+        mine_num = ((width * height) as f32 * Difficulty::value(&i)) as u16;
+    }
+
+    let mut working_board = Board::new(width as usize, height as usize, mine_num as usize).unwrap();
 
     let mut stdout = stdout();
     enable_raw_mode().unwrap();
@@ -29,13 +170,14 @@ fn main() {
         Clear(ClearType::All), 
         cursor::MoveTo(0, 0),
         cursor::DisableBlinking,
+        DisableLineWrap,
     );
 
     print!("╔═════╦");
     for _ in 0..width - SPACING { print!("═") }
     print!("╦═════╗\n");
 
-    print!("║ {:03} ║", working_board.mine_total);
+    print!("║ {:03} ║", cmp::min(working_board.mine_total, 999));
 
     for _ in 0..width - SPACING { print!(" ") }
 
@@ -57,7 +199,10 @@ fn main() {
         cursor::MoveTo(1, 3),
     );
 
-    let mut cursor_pos: (u16, u16) = (0, 0);
+    let cursor_pos = Arc::new(Mutex::new((0u16, 0u16)));
+
+    let (main_tx, clock_rx) = mpsc::channel::<bool>();
+    launch_clock(Arc::clone(&cursor_pos), width.clone(), clock_rx);
 
     loop {  
         match read().unwrap() {
@@ -75,9 +220,11 @@ fn main() {
             }) | Event::Key(KeyEvent {
                 code: KeyCode::Char('d'), ..
             }) => {
-                if cursor_pos.0 < width - 1 {
+                let mut pos = cursor_pos.lock().unwrap();
+
+                if pos.0 < width - 1 {
                     execute!(stdout.lock(), cursor::MoveRight(1)).unwrap();
-                    cursor_pos.0 += 1;
+                    pos.0 += 1;
                 }
             },
             Event::Key(KeyEvent {
@@ -85,9 +232,11 @@ fn main() {
             }) | Event::Key(KeyEvent {
                 code: KeyCode::Char('a'), ..
             }) => {
-                if cursor_pos.0 > 0 {
+                let mut pos = cursor_pos.lock().unwrap();
+
+                if pos.0 > 0 {
                     execute!(stdout.lock(), cursor::MoveLeft(1)).unwrap();
-                    cursor_pos.0 -= 1;
+                    pos.0 -= 1;
                 }
             },
             Event::Key(KeyEvent {
@@ -95,9 +244,11 @@ fn main() {
             }) | Event::Key(KeyEvent {
                 code: KeyCode::Char('w'), ..
             }) => {
-                if cursor_pos.1 > 0 {
+                let mut pos = cursor_pos.lock().unwrap();
+
+                if pos.1 > 0 {
                     execute!(stdout.lock(), cursor::MoveUp(1)).unwrap();
-                    cursor_pos.1 -= 1;
+                    pos.1 -= 1;
                 }
             },
             Event::Key(KeyEvent {
@@ -105,31 +256,78 @@ fn main() {
             }) | Event::Key(KeyEvent {
                 code: KeyCode::Char('s'), ..
             }) => {
-                if cursor_pos.1 < height - 1 {
+                let mut pos = cursor_pos.lock().unwrap();
+
+                if pos.1 < height - 1 {
                     execute!(stdout.lock(), cursor::MoveDown(1)).unwrap();
-                    cursor_pos.1 += 1;
+                    pos.1 += 1;
                 }
             },
             Event::Key(KeyEvent {
                 code: KeyCode::Char('q'), ..
             }) => {
-                working_board.push_state(cursor_pos.0 as usize, cursor_pos.1 as usize, PushState::Uncover);
-                refresh_board(&cursor_pos, &working_board, &width);
+                let pos = cursor_pos.lock().unwrap();
+
+                working_board.push_state(pos.0 as usize, pos.1 as usize, PushState::Uncover);
+                refresh_board(&pos, &working_board, &width, &main_tx);
+
+                if working_board.won.is_some() { 
+                    execute!(stdout.lock(), cursor::MoveTo(0, height + 4));
+                    break 
+                }
             },
             Event::Key(KeyEvent {
                 code: KeyCode::Char('e'), ..
             }) => {
-                working_board.push_state(cursor_pos.0 as usize, cursor_pos.1 as usize, PushState::Flag);
-                refresh_board(&cursor_pos, &working_board, &width);
+                let pos = cursor_pos.lock().unwrap();
+
+                working_board.push_state(pos.0 as usize, pos.1 as usize, PushState::Flag);
+                refresh_board(&pos, &working_board, &width, &main_tx);
+
+                if working_board.won.is_some() { 
+                    execute!(stdout.lock(), cursor::MoveTo(0, height + 4));
+                    break 
+                }
             },
             _ => (),
         }
     }
 
+    execute!(stdout, EnableLineWrap);
     disable_raw_mode().unwrap();
 }
 
-fn refresh_board(pos: &(u16, u16), working_board: &Board, width: &u16) {
+fn launch_clock(cursor_pos: Arc<Mutex<(u16, u16)>>, width: u16, rx: mpsc::Receiver<bool>) {
+    let stdout = stdout();
+    let mut time = 0;
+
+    thread::spawn(move || { 
+        if !rx.recv().unwrap() {
+            return;
+        }
+
+        for _ in 0..1000 {
+            thread::sleep(Duration::from_secs(1));
+
+            if Ok(false) == rx.try_recv() {
+                return;
+            }
+
+            let mut stdout_handle = stdout.lock();
+            let pos = cursor_pos.lock().unwrap();
+            time += 1;
+
+            execute!(
+                stdout_handle,
+                cursor::MoveTo(width - 3, 1),
+                Print(&format!("{:03}", time)[..]),
+                cursor::MoveTo(pos.0 + 1, pos.1 + 3),
+            );
+        }
+    });
+}
+
+fn refresh_board(pos: &(u16, u16), working_board: &Board, width: &u16, tx: &mpsc::Sender<bool>) {
     let stdout = stdout();
     let mut stdout_handle = stdout.lock();
 
@@ -140,20 +338,29 @@ fn refresh_board(pos: &(u16, u16), working_board: &Board, width: &u16) {
         Print(working_board),
     );
 
-    execute!(stdout_handle, cursor::MoveTo(2, 1));
-    print!("{:03}", working_board.mine_total - working_board.flag_total);
+    execute!(
+        stdout_handle, 
+        cursor::MoveTo(2, 1),
+        Print(&format!("{:03}", cmp::min(working_board.mine_total - working_board.flag_total, 999))[..])
+    );
 
     if let Some(i) = working_board.won {
         let spacer = width / 2 - 3;
 
-        execute!(stdout_handle, cursor::MoveTo(spacer, 1));
+        execute!(
+            stdout_handle, 
+            cursor::MoveTo(spacer, 1),
+            Print(match i {
+                true if width % 2 == 0 => "YOU  WON",
+                true => " YOU WON ",
+                false if width % 2 == 0 => "YOU LOST",
+                false => "YOU  LOST"
+            }),
+        );
 
-        print!("{}", match i {
-            true if width % 2 == 0 => "YOU  WON",
-            true => " YOU WON ",
-            false if width % 2 == 0 => "YOU LOST",
-            false => "YOU  LOST"
-        });
+        let _ = tx.send(false);
+    } else {
+        let _ = tx.send(true);
     }
 
     execute!(
@@ -258,7 +465,7 @@ mod board {
         pub mine_total: usize,
         pub flag_total: usize,
         flag_correct: usize,
-        uncover_correct: usize,
+        first_uncover: bool,
     }
 
     impl Board {
@@ -267,6 +474,9 @@ mod board {
 
             if total < mine_num {
                 return Err(String::from("There cannot be more mines then there are tiles"));
+
+            } else if total == mine_num {
+                return Err(String::from("At least one tile must be safe"));
             }
 
             let mut mine_values = vec![true; mine_num];
@@ -290,8 +500,8 @@ mod board {
                 mine_total: mine_num,
                 flag_total: 0,
                 flag_correct: 0,
-                uncover_correct: 0,
                 won: None,
+                first_uncover: true,
             })
         }
         
@@ -346,8 +556,14 @@ mod board {
                 _ => (),
             };
 
-            if self.flag_correct == self.mine_total || self.uncover_correct == self.tiles.len() - self.mine_total {
-                self.end_game(true);
+            let uncover_correct = self.tiles.iter()
+                .filter(|i| i.state == State::Uncovered && !i.mine)
+                .collect::<Vec<_>>().len();
+
+            if self.won.is_none() {
+                if self.flag_correct == self.mine_total || uncover_correct == self.tiles.len() - self.mine_total {
+                    self.end_game(true);
+                }
             }
         }
 
@@ -360,17 +576,46 @@ mod board {
         }
 
         fn uncover_tile(&mut self, x: usize, y: usize) {
-            let mut tile = &mut self.tiles[get_1d(x, y, self.width)];
+            let tile_pos = get_1d(x, y, self.width);
+            let mut tile = &mut self.tiles[tile_pos];
 
-            if tile.mine {
+            if tile.mine && self.first_uncover {
+                tile.mine = false;
+
+                for s in get_1d_manhattan(tile_pos, self.width) {
+                    if let Some(i) = self.tiles.get_mut(s) {
+                        i.mines_surrounding -= 1;
+                    }
+                }
+                
+                let mut possible_replacements: Vec<_> = self.tiles.iter().enumerate()
+                    .filter(|i| !i.1.mine)
+                    .map(|i| i.0)
+                    .collect();
+                possible_replacements.shuffle(&mut thread_rng());
+                let replacement = possible_replacements[0];
+
+                let mut swap_tile = &mut self.tiles[replacement];
+                swap_tile.mine = true;
+
+                for s in get_1d_manhattan(replacement, self.width) {
+                    if let Some(i) = self.tiles.get_mut(s) {
+                        i.mines_surrounding += 1;
+                    }
+                }
+
+            } else if tile.mine {
                 self.end_game(false);
                 return;
             }
 
+            self.first_uncover = false;
+
+            let mut tile = &mut self.tiles[tile_pos];
+
             tile.state = State::Uncovered;
 
             if tile.mines_surrounding == 0 {
-                // self.clear_zeros();
                 self.clear_zeros((x, y));
             }
         }
@@ -389,34 +634,32 @@ mod board {
         fn clear_zeros(&mut self, starting_pos: (usize, usize)) {
             let starting_pos = get_1d(starting_pos.0, starting_pos.1, self.width);
 
-            let mut uncover = vec!(starting_pos);
-            let mut working = uncover.clone();
+            let mut working = vec!(starting_pos);
 
             while !working.is_empty() {
+                for t in &working {
+                    self.tiles.get_mut(*t).unwrap().state = State::Uncovered;
+                }
+
                 let surroundings: Vec<usize> = working.iter()
                     .map(|i| get_1d_manhattan(*i, self.width))
                     .flatten()
                     .unique()
-                    .filter(|i| !uncover.contains(i))
                     .filter(|i| match self.tiles.get(*i) {
                         Some(n) if n.state == State::Covered => true,
                         _ => false,
                     })
                     .collect();
 
-                uncover.extend(&surroundings);
-
                 working.clear();
 
                 for t in surroundings {
                     if self.tiles.get(t).unwrap().mines_surrounding == 0 {
                         working.push(t);
+                    } else {
+                        self.tiles.get_mut(t).unwrap().state = State::Uncovered;
                     }
                 }
-            }
-
-            for t in uncover {
-                self.tiles.get_mut(t).unwrap().state = State::Uncovered;
             }
         }
     }
@@ -424,40 +667,7 @@ mod board {
     impl fmt::Display for Board {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
 
-            // let spacing = 12;
-
-            let mut formatted = String::from("");
-
-            // formatted.push_str("╔═════╦");
-            // for _ in 0..self.width - spacing { formatted.push_str("═") }
-            // formatted.push_str("╦═════╗\n");
-
-            // formatted.push_str(&format!("║ {:03} ║", self.mine_total - self.flag_total)[..]);
-
-            // if let Some(i) = self.won {
-            //     let spacer = (self.width - spacing - 8) / 2;
-
-            //     for _ in 0..spacer { formatted.push_str(" ") }
-
-            //     formatted.push_str(match i {
-            //         true if self.width % 2 == 0 => "YOU  WON",
-            //         true => " YOU WON ",
-            //         false if self.width % 2 == 0 => "YOU LOST",
-            //         false => "YOU  LOST"
-            //     });
-
-            //     for _ in 0..spacer { formatted.push_str(" ") }
-
-            // } else {
-            //     for _ in 0..self.width - spacing { formatted.push_str(" ") }
-            // }
-
-            // formatted.push_str("║ 000 ║\n");
-            // formatted.push_str("╠═════╩");
-            // for _ in 0..self.width - spacing { formatted.push_str("═") }
-            // formatted.push_str("╩═════╣\n║");
-
-            formatted.push_str("║");
+            let mut formatted = String::from("║");
 
             for (count, tile) in self.tiles.iter().enumerate() {
                 formatted.push_str(&tile.to_string());
@@ -469,12 +679,6 @@ mod board {
                 }
             }
 
-            // formatted.push_str("╚");
-            // for _ in 0..self.width {
-            //     formatted.push_str("═");
-            // }
-            // formatted.push_str("╝");
-
             write!(f, "{}", formatted)
         }
     }
@@ -484,7 +688,7 @@ mod board {
 
         #[test]
         fn board_clear() {
-            let mut test_board = Board::new(25, 25, 0).unwrap();
+            let mut test_board = Board::new(188, 66, 0).unwrap();
             test_board.push_state(0, 0, PushState::Uncover);
 
             assert!(test_board.tiles.iter()
