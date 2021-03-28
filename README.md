@@ -1,10 +1,10 @@
 # cls-minesweeper
 
-**cls-minesweeper** is a simple clone of minesweeper designed to be played in the terminal. It uses [crossterm](https://github.com/crossterm-rs/crossterm) so in theory it should be compatible with most terminals.
+**cls-minesweeper** is a simple clone of minesweeper designed to be played in the terminal. It uses [crossterm](https://github.com/crossterm-rs/crossterm) so in theory it should be compatible with most terminals. The program comes with a number of arguments that allow for control over the games generation, which can be viewed with *--help*.
 
 ### How to Play
 
-Use the arrow keys or WASD to move the cursor around. Use Q to uncover, and E to flag. All rules are otherwise the same as normal minesweeper!
+Use the arrow keys or WASD to move the cursor around. Use Q to uncover, and E to flag. Use CTRL+Q or ESC to exit the game. All rules are otherwise the same as normal minesweeper!
 
 ### Features
 
