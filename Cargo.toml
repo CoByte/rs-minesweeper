@@ -1,0 +1,12 @@
+[package]
+name = "rs-minesweeper"
+version = "0.1.0"
+authors = ["Owen <owen356wh@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rand = "*"
+crossterm = "0.19.0"
+itertools = "0.10.0"
