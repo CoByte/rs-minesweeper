@@ -1,8 +1,15 @@
 [package]
-name = "rs-minesweeper"
+name = "cmd-minesweeper"
 version = "0.1.0"
-authors = ["Owen <owen356wh@gmail.com>"]
+authors = ["CoByte"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
+description = "A simple command line based minesweeper clone"
+homepage = "https://github.com/CoByte/rs-minesweeper"
+repository = "https://github.com/CoByte/rs-minesweeper"
+readme = "README.md"
+keywords = ["cli", "minesweeper"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
