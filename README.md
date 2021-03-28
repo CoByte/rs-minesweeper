@@ -16,3 +16,5 @@ Use the arrow keys or WASD to move the cursor around. Use Q to uncover, and E to
 - [ ] Key remaping/configuration changing
 
 No promises that any of this will ever get added, but no ones going to use this anyways, so it should be ok.
+
+This is my first non-trivial project in rust, and my first project to be released to the wider world, so weird bugs are inevitable, and the code is fairly gross. Any and all feedback would be deeply appreciated.
