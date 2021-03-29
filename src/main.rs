@@ -72,15 +72,15 @@ fn main() {
                 .takes_value(true)
         )
         .arg(
-            Arg::with_name("width_max")
+            Arg::with_name("max_width")
                 .help("Sets the width to its maximum. Not compatible with -w [WIDTH]")
-                .long("width-max")
+                .long("max-width")
                 .conflicts_with("width")
         )
         .arg(
-            Arg::with_name("height_max")
+            Arg::with_name("max_height")
                 .help("Sets the width to its maximum. Not compatible with -h [HEIGHT]")
-                .long("height-max")
+                .long("max-height")
                 .conflicts_with("height")
         )
         .arg(
@@ -111,7 +111,7 @@ fn main() {
 
     let mut width = value_t!(matches, "width", u16).unwrap_or(22);
     let mut height = value_t!(matches, "height", u16).unwrap_or(12);
-    let mut mine_num = value_t!(matches, "height", u16).unwrap_or(41);
+    let mut mine_num = value_t!(matches, "mine_num", u16).unwrap_or(41);
 
     let size = size().unwrap();
     let size = (size.0 - 2, size.1 - 5);
@@ -128,13 +128,14 @@ fn main() {
 
     if mine_num >= width * height {
         println!("error: number of mines cannot be equal to or larger then the total number of tiles");
+        return;
     }
 
-    if matches.is_present("width_max") {
+    if matches.is_present("max_width") {
         width = size.0;
     }
 
-    if matches.is_present("height_max") {
+    if matches.is_present("max_height") {
         height = size.1;
     }
 
@@ -177,16 +178,16 @@ fn main() {
 
     print!("╔═════╦");
     for _ in 0..width - SPACING { print!("═") }
-    print!("╦═════╗\n");
+    print!("╦═════╗\r\n");
 
     print!("║ {:03} ║", cmp::min(working_board.mine_total, 999));
 
     for _ in 0..width - SPACING { print!(" ") }
 
-    print!("║ 000 ║\n");
+    print!("║ 000 ║\r\n");
     print!("╠═════╩");
     for _ in 0..width - SPACING { print!("═") }
-    print!("╩═════╣\n");
+    print!("╩═════╣\r\n");
 
     println!("{}", working_board);
 
@@ -677,7 +678,7 @@ mod board {
                 if count == self.tiles.len() - 1 {
                     formatted.push_str("║")
                 } else if count % self.width == self.width - 1 {
-                    formatted.push_str("║\n║");
+                    formatted.push_str("║\r\n║");
                 }
             }
 
