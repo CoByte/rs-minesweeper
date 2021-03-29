@@ -189,7 +189,7 @@ fn main() {
     for _ in 0..width - SPACING { print!("═") }
     print!("╩═════╣\r\n");
 
-    println!("{}", working_board);
+    print!("{}\r\n", working_board);
 
     print!("╚");
     for _ in 0..width {
